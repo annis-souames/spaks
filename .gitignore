@@ -1,0 +1,131 @@
+# Go specific ignores
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+go.sum
+go.mod
+
+# Go workspace file
+go.work
+
+# Python specific ignores
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions (from Python)
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE specific files
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+out/
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# General
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Project specific
+# Logs
+logs/
+*.log
+
+# Local configs
+config.local.yaml
+*.local.yaml
+*.local.yml
+*_local.yaml
+*_local.yml
+*_local.json
+
+# Dependency subdirectories (if using a custom approach)
+ABC/.git/

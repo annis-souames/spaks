@@ -1,0 +1,18 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
+approvers:
+- sanposhiho
+- 196Ikuchil
+
+# emeritus:
+# - adtac
+
+reviewers:
+- sanposhiho
+- 196Ikuchil
+
+# emeritus:
+# - adtac
+
+labels:
+- sig/scheduling
