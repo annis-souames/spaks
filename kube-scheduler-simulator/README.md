@@ -1,3 +1,13 @@
+# Notes on original project
+
+**Disclaimer:** This project was taken as it is from the kube-scheduler-simulator project that you can [find in this repo](https://github.com/kubernetes-sigs/kube-scheduler-simulator) by K8S SIGS team. The main changes are the following:
+
+- Scheduler plugin in `kube-scheduler-simulator/simulator/docs/sample/drl/`
+
+- Accordingly updating the scheduler main command in `kube-scheduler-simulator/simulator/cmd/scheduler`
+
+The rest is the README from the original project. For the actual DRL model or infrastructure setup scripts please check `drl/` and `infra/` respectively at the root level of this project.
+
 # Kubernetes scheduler simulator
 
 Hello world. Here is Kubernetes scheduler simulator.

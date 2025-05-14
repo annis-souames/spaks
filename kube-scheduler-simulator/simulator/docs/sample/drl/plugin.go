@@ -143,7 +143,7 @@ func (pl *ResourceAwareScorer) sendResourceInfoToEndpoint(clusterState *ClusterS
 
 	klog.V(4).Infof("Sending cluster state to endpoint: %s", string(jsonData))
 
-	resp, err := http.Post("http://localhost:5000", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post("http://172.17.0.1:5000/cluster-info", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error sending resource data to endpoint: %v", err)
 	}

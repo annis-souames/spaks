@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify
+import logging
 import random
+logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
 
@@ -19,8 +21,7 @@ def cluster_info():
         return jsonify({"error": "invalid or missing JSON"}), 400
 
     # (You could inspect or log `data` here if you like)
-    print("Received cluster info:")
-    print(data)
+    logging.info("Received cluster info: %s", data)
     score = random.randint(1, 100)
     return jsonify({"score": score})
 
