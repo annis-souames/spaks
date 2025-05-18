@@ -12,7 +12,7 @@ import (
 
 	"sigs.k8s.io/kube-scheduler-simulator/simulator/pkg/debuggablescheduler"
 	// Import the DRL scheduler plugin
-	DRL "sigs.k8s.io/kube-scheduler-simulator/simulator/docs/sample/drl"
+	DRL "sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler"
 )
 
 func main() {
