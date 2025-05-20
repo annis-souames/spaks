@@ -29,10 +29,14 @@ var _ framework.PreScorePlugin = &ResourceAwareScorer{}
 // NodeResourceInfo holds resource information for a node
 type NodeResourceInfo struct {
 	NodeName        string `json:"nodeName"`
-	CPUTotal        int64  `json:"cpuTotal"`        // in millicores
-	CPURemaining    int64  `json:"cpuRemaining"`    // in millicores
+	CPUTotal        uint32 `json:"cpuTotal"`        // in millicores
+	CPURemaining    uint32 `json:"cpuRemaining"`    // in millicores
+	CPUUsedPct      int64  `json:"cpuUsedPct"`      // in percentage
+	CPUModel        string `json:"cpuModel"`        // CPU model name
+	CPUFreq         int64  `json:"cpuFreq"`         // CPU frequency in MHz
 	MemoryTotal     int64  `json:"memoryTotal"`     // in bytes
 	MemoryRemaining int64  `json:"memoryRemaining"` // in bytes
+	MemUsedPct      int64  `json:"memUsedPct"`      // in percentage
 }
 
 // ClusterState holds resource information for all nodes
@@ -120,14 +124,25 @@ func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*Clu
 		cpuRemaining := cpuCapacity - cpuUsed
 		memRemaining := memCapacity - memUsed
 
+		// Calculate used percentage
+		cpuUsedPct := (cpuUsed * 100) / cpuCapacity
+		memUsedPct := (memUsed * 100) / memCapacity
+
+		cpuFreq := rand.Int63n(3200-2600) + 2600 // Example frequency in MHz between 2600 and 3200
+
 		nodeResourceInfo := NodeResourceInfo{
 			NodeName:        node.Name,
-			CPUTotal:        cpuCapacity,
-			CPURemaining:    cpuRemaining,
+			CPUModel:        node.Labels["cpu_model"],
+			CPUFreq:         cpuFreq, // Example frequency in MHz
+			CPUTotal:        uint32(cpuCapacity),
+			CPURemaining:    uint32(cpuRemaining),
+			CPUUsedPct:      cpuUsedPct,
 			MemoryTotal:     memCapacity,
 			MemoryRemaining: memRemaining,
+			MemUsedPct:      memUsedPct,
 		}
-
+		klog.Infof("Node %s: CPU Total: %d, CPU Remaining: %d, Memory Total: %d, Memory Remaining: %d",
+			node.Name, cpuCapacity, cpuRemaining, memCapacity, memRemaining)
 		clusterState.Nodes = append(clusterState.Nodes, nodeResourceInfo)
 	}
 
