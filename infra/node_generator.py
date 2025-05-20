@@ -3,18 +3,19 @@
 Apply Kubernetes Node resources to a KWOK-backed cluster based on specs in a CSV file.
 
 CSV format:
-  name,labels,cpu,memory[,pods]
+  name,labels,cpu,memory,cpu_model[,pods]
 
 - name: node name
 - labels: semicolon-separated key=value pairs
 - cpu: number or value with unit (e.g., 4, "4", "4m", etc.)
 - memory: value with unit (e.g., "8Gi")
+- cpu_model: CPU model name (e.g., "Intel Xeon E5-2680")
 - pods: (optional) maximum pods, defaults to 110
 
 Example CSV:
-name,labels,cpu,memory,pods
-kwok-node-0,"beta.kubernetes.io/os=linux;kubernetes.io/role=agent",32,256Gi,110
-kwok-node-1,"beta.kubernetes.io/os=linux;kubernetes.io/role=agent",16,128Gi,100
+name,labels,cpu,memory,cpu_model,pods
+kwok-node-0,"beta.kubernetes.io/os=linux;kubernetes.io/role=agent",32,256Gi,"Intel Xeon E5-2680",110
+kwok-node-1,"beta.kubernetes.io/os=linux;kubernetes.io/role=agent",16,128Gi,"AMD EPYC 7763",100
 
 Usage:
   pip install pyyaml
@@ -48,6 +49,10 @@ def build_node_manifest(name, labels, cpu, memory, pods):
     """
     Construct a Node manifest dict for kubectl.
     """
+    # Add cpu_model to labels if provided
+    if 'cpu_model' in labels:
+        labels['cpu-model'] = labels.pop('cpu_model')
+        
     return {
         'apiVersion': 'v1',
         'kind': 'Node',
@@ -96,6 +101,9 @@ def main(csv_path):
         for row in reader:
             name = row['name']
             labels = parse_labels(row.get('labels', ''))
+            # Add CPU model to labels if present
+            if 'cpu_model' in row:
+                labels['cpu-model'] = row['cpu_model']
             cpu = row['cpu']
             memory = row.get('memory') or row.get('ram')
             pods = int(row.get('pods', 110))

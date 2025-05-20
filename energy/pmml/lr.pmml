@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<PMML xmlns="http://www.dmg.org/PMML-4_4" xmlns:data="http://jpmml.org/jpmml-model/InlineTable" version="4.4">
+	<Header>
+		<Application name="SkLearn2PMML package" version="0.116.4"/>
+		<Timestamp>2025-05-20T22:12:49Z</Timestamp>
+	</Header>
+	<MiningBuildTask>
+		<Extension name="repr">PMMLPipeline(steps=[('lr', LinearRegression())])</Extension>
+	</MiningBuildTask>
+	<DataDictionary>
+		<DataField name="y" optype="continuous" dataType="double"/>
+		<DataField name="CPU_Model" optype="continuous" dataType="double"/>
+		<DataField name="RAM_Capacity_GB" optype="continuous" dataType="double"/>
+		<DataField name="CPU_Freq_MHz" optype="continuous" dataType="double"/>
+		<DataField name="Num_Cores" optype="continuous" dataType="double"/>
+		<DataField name="Achieved_Load_Pct" optype="continuous" dataType="double"/>
+	</DataDictionary>
+	<RegressionModel functionName="regression" algorithmName="sklearn.linear_model._base.LinearRegression">
+		<MiningSchema>
+			<MiningField name="y" usageType="target"/>
+			<MiningField name="CPU_Model"/>
+			<MiningField name="RAM_Capacity_GB"/>
+			<MiningField name="CPU_Freq_MHz"/>
+			<MiningField name="Num_Cores"/>
+			<MiningField name="Achieved_Load_Pct"/>
+		</MiningSchema>
+		<RegressionTable intercept="-163.76315711166527">
+			<NumericPredictor name="CPU_Model" coefficient="0.8850477138712118"/>
+			<NumericPredictor name="RAM_Capacity_GB" coefficient="0.15825337759734096"/>
+			<NumericPredictor name="CPU_Freq_MHz" coefficient="0.017976172376766325"/>
+			<NumericPredictor name="Num_Cores" coefficient="0.5003329246556588"/>
+			<NumericPredictor name="Achieved_Load_Pct" coefficient="2.246970006002958"/>
+		</RegressionTable>
+	</RegressionModel>
+</PMML>
