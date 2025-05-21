@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
+	"os"
+
 	"fmt"
 	"math/rand"
 	"net/http"
 	"time"
+
+	"github.com/asafschers/goscore"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,6 +48,23 @@ type NodeResourceInfo struct {
 type ClusterState struct {
 	Nodes     []NodeResourceInfo `json:"nodes"`
 	Timestamp int64              `json:"timestamp"`
+}
+
+// energyScoreState holds the energy scores for nodes
+type energyScoreState struct {
+	scores map[string]float64
+}
+
+// Clone implements the StateData interface
+func (e *energyScoreState) Clone() framework.StateData {
+	if e == nil {
+		return nil
+	}
+	newScores := make(map[string]float64, len(e.scores))
+	for k, v := range e.scores {
+		newScores[k] = v
+	}
+	return &energyScoreState{scores: newScores}
 }
 
 // ResourceAwareScorer holds the scheduler handle for accessing the snapshot.
@@ -173,23 +195,26 @@ func (pl *ResourceAwareScorer) sendResourceInfoToEndpoint(clusterState *ClusterS
 
 // PreScore is called before Score to calculate and send resource information once per scheduling cycle
 func (pl *ResourceAwareScorer) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
-	klog.InfoS("Execute PreScore on DRL plugin", "pod", klog.KObj(pod))
-
-	// Calculate and send resource information
+	// Calculate energy score for each node based on the functions in energy.go and the information clusterState (might need to node per node)
 	clusterState, err := pl.calculateNodeResources(ctx)
+	energyScores := make(map[string]float64)
 	if err != nil {
 		klog.ErrorS(err, "Failed to calculate node resources")
-		// Continue with scoring even if resource calculation fails
-	} else {
-		err = pl.sendResourceInfoToEndpoint(clusterState)
-		if err != nil {
-			klog.ErrorS(err, "Failed to send resource info to endpoint")
-			// Continue with scoring even if sending fails
-		}
+		return framework.NewStatus(framework.Error)
 	}
 
-	// Mark that we've sent the resource info in this cycle
-	state.Write(stateKey, &resourceSentState{sent: true})
+	for _, nodeInfo := range clusterState.Nodes {
+		energyScore, err := GetEnergyScore(nodeInfo)
+		if err != nil {
+			klog.ErrorS(err, "Failed to calculate energy score")
+			return framework.NewStatus(framework.Error)
+		}
+		klog.Infof("Energy score: %v", energyScore)
+		energyScores[nodeInfo.NodeName] = energyScore
+	}
+
+	// Save the energy score for each node in the cycle state
+	state.Write("energyScore", &energyScoreState{scores: energyScores})
 
 	return nil
 }
@@ -214,15 +239,84 @@ func (pl *ResourceAwareScorer) Score(
 ) (int64, *framework.Status) {
 	klog.InfoS("Execute Score on DRL plugin", "pod", klog.KObj(pod), "node", nodeName)
 
-	// Generate a random score between 40 and 70
-	rand.Seed(time.Now().UnixNano())
-	score := rand.Int63n(31) + 40 // Random number between 40 and 70
-	klog.Infof("Node %s scored %d for pod %s/%s", nodeName, score, pod.Namespace, pod.Name)
+	// Get the energy scores from the cycle state
+	energyScores, err := state.Read("energyScore")
+	if err != nil {
+		return 0, framework.NewStatus(framework.Error)
+	}
+	// return the energy score for the node
+	energyScore := energyScores.(*energyScoreState)
+	if energyScore == nil {
+		return 0, framework.NewStatus(framework.Error)
+	}
 
-	return score, framework.NewStatus(framework.Success)
+	// Get the energy score for the node
+	score := energyScore.scores[nodeName]
+	return int64(score), framework.NewStatus(framework.Success)
 }
 
 // ScoreExtensions returns nil as we don't implement NormalizeScore.
 func (pl *ResourceAwareScorer) ScoreExtensions() framework.ScoreExtensions {
 	return nil
+}
+
+/*
+Helper functions
+
+*/
+
+func LoadEnergyModel(modelPath string) (goscore.RandomForest, error) {
+	modelXml, _ := os.ReadFile(modelPath)
+	var model goscore.RandomForest // or goscore.GradientBoostedModel
+	xml.Unmarshal([]byte(modelXml), &model)
+	return model, nil
+}
+
+func ConvertCPUModel(cpuModel string) float32 {
+	// Read target encoding mapping from JSON file
+	jsonData, err := os.ReadFile("models/target_encoding_model.json")
+	if err != nil {
+		return 0 // Return default value on error
+	}
+
+	// Parse JSON into map
+	var targetEncodings map[string]float32
+	if err := json.Unmarshal(jsonData, &targetEncodings); err != nil {
+		return 0 // Return default value on error
+	}
+
+	// Look up mean target encoding value for CPU model
+	if meanValue, exists := targetEncodings[cpuModel]; exists {
+		return meanValue
+	}
+
+	return 0 // Return default value if CPU model not found
+}
+
+func GetEnergyScore(nodeInfo NodeResourceInfo) (float64, error) {
+	// Create features map for prediction
+	features := map[string]interface{}{
+		"CPU_Model":         230,
+		"RAM_Capacity_GB":   nodeInfo.MemoryTotal / (1024 * 1024 * 1024), // Convert bytes to GB
+		"CPU_Freq_MHz":      nodeInfo.CPUFreq,
+		"Num_Cores":         nodeInfo.CPUTotal / 1000, // Convert millicores to cores
+		"Achieved_Load_Pct": nodeInfo.CPUUsedPct + 10, // Add 10% to the achieved load percentage
+	}
+
+	model, err := LoadEnergyModel("models/rf.pmml")
+	if err != nil {
+		klog.ErrorS(err, "Failed to load energy model")
+		return 0, err
+	}
+	klog.Infof("model: %v", model.XMLName)
+	klog.Infof("Features: %v", features)
+	// Get prediction from model
+	prediction, err := model.Score(features, "1")
+	if err != nil {
+		return 0, err
+	}
+
+	klog.Infof("Energy score: %v", prediction)
+
+	return prediction, nil
 }
