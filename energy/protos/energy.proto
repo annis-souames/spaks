@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package energy;
+
+// Service definition for power prediction
+service EnergyService {
+  // Predict power for a single request
+  rpc PredictPower(PredictionRequest) returns (PredictionResponse) {}
+  
+  // Predict power for multiple requests in batch
+  rpc PredictPowerBatch(BatchPredictionRequest) returns (BatchPredictionResponse) {}
+}
+
+// Single prediction request
+message PredictionRequest {
+  string cpu_model = 1;
+  double ram_capacity_gb = 2;
+  int32 cpu_freq_mhz = 3;
+  int32 num_cores = 4;
+  double achieved_load_pct = 5;
+}
+
+// Response for a single prediction
+message PredictionResponse {
+  double predicted_power_watts = 1;
+  string status = 2;
+  string error = 3;
+}
+
+// Batch prediction request
+message BatchPredictionRequest {
+  repeated PredictionRequest requests = 1;
+}
+
+// Response for batch prediction
+message BatchPredictionResponse {
+  repeated double predictions = 1;
+  string status = 2;
+  string error = 3;
+}
