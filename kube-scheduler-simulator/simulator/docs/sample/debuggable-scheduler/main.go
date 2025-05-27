@@ -11,7 +11,7 @@ import (
 	_ "k8s.io/component-base/metrics/prometheus/version" // for version metric registration
 	"k8s.io/klog/v2"
 
-	drlScheduler "sigs.k8s.io/kube-scheduler-simulator/simulator/docs/sample/drl"
+	drlScheduler "sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler"
 	"sigs.k8s.io/kube-scheduler-simulator/simulator/pkg/debuggablescheduler"
 )
 

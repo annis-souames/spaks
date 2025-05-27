@@ -1,30 +1,24 @@
 package drlScheduler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"encoding/xml"
-	"os"
-
 	"fmt"
 	"math/rand"
-	"net/http"
 	"time"
 
-	"github.com/asafschers/goscore"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/proto"
 )
 
 const (
 	// Name is the plugin name used in logs and configuration.
 	Name = "DRL"
-	// stateKey is the key used to store whether we've sent resource info in this cycle
-	stateKey = "DRLSchedulerResourceInfoSent"
 )
 
 // Ensure we implement the Score extension.
@@ -69,17 +63,9 @@ func (e *energyScoreState) Clone() framework.StateData {
 
 // ResourceAwareScorer holds the scheduler handle for accessing the snapshot.
 type ResourceAwareScorer struct {
-	handle framework.Handle
-}
-
-// resourceSentState is a cycle state for tracking if resource info has been sent
-type resourceSentState struct {
-	sent bool
-}
-
-// Clone implements the StateData interface
-func (s *resourceSentState) Clone() framework.StateData {
-	return &resourceSentState{sent: s.sent}
+	handle     framework.Handle
+	grpcClient proto.EnergyServiceClient
+	grpcConn   *grpc.ClientConn
 }
 
 // Name returns the plugin's name.
@@ -89,16 +75,20 @@ func (pl *ResourceAwareScorer) Name() string {
 
 // New initializes the plugin.
 func New(_ context.Context, arg runtime.Object, h framework.Handle) (framework.Plugin, error) {
-	// You could parse arguments here if needed, similar to the NodeNumber example
-	// var args SomeArgsType
-	// if arg != nil {
-	//     err := frameworkruntime.DecodeInto(arg, &args)
-	//     if err != nil {
-	//         return nil, fmt.Errorf("failed to decode args: %w", err)
-	//     }
-	// }
+	// Establish gRPC connection to energy server
+	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		klog.ErrorS(err, "Failed to connect to energy service")
+		return nil, fmt.Errorf("failed to connect to energy service: %w", err)
+	}
 
-	return &ResourceAwareScorer{handle: h}, nil
+	client := proto.NewEnergyServiceClient(conn)
+
+	return &ResourceAwareScorer{
+		handle:     h,
+		grpcClient: client,
+		grpcConn:   conn,
+	}, nil
 }
 
 // calculateNodeResources calculates total and remaining resources for each node
@@ -171,28 +161,6 @@ func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*Clu
 	return clusterState, nil
 }
 
-// sendResourceInfoToEndpoint sends the resource information to localhost:5000
-func (pl *ResourceAwareScorer) sendResourceInfoToEndpoint(clusterState *ClusterState) error {
-	jsonData, err := json.Marshal(clusterState)
-	if err != nil {
-		return fmt.Errorf("error marshaling resource data: %v", err)
-	}
-
-	klog.V(4).Infof("Sending cluster state to endpoint: %s", string(jsonData))
-
-	resp, err := http.Post("http://172.17.0.1:5000/cluster-info", "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("error sending resource data to endpoint: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("endpoint returned non-OK status: %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
 // PreScore is called before Score to calculate and send resource information once per scheduling cycle
 func (pl *ResourceAwareScorer) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	// Calculate energy score for each node based on the functions in energy.go and the information clusterState (might need to node per node)
@@ -204,12 +172,12 @@ func (pl *ResourceAwareScorer) PreScore(ctx context.Context, state *framework.Cy
 	}
 
 	for _, nodeInfo := range clusterState.Nodes {
-		energyScore, err := GetEnergyScore(nodeInfo)
+		energyScore, err := pl.getEnergyScoreViaGRPC(ctx, nodeInfo)
 		if err != nil {
-			klog.ErrorS(err, "Failed to calculate energy score")
+			klog.ErrorS(err, "Failed to calculate energy score via gRPC", "node", nodeInfo.NodeName)
 			return framework.NewStatus(framework.Error)
 		}
-		klog.Infof("Energy score: %v", energyScore)
+		klog.V(4).InfoS("Energy score calculated", "node", nodeInfo.NodeName, "score", energyScore)
 		energyScores[nodeInfo.NodeName] = energyScore
 	}
 
@@ -260,63 +228,29 @@ func (pl *ResourceAwareScorer) ScoreExtensions() framework.ScoreExtensions {
 	return nil
 }
 
-/*
-Helper functions
+// getEnergyScoreViaGRPC requests energy prediction from the gRPC server
+func (pl *ResourceAwareScorer) getEnergyScoreViaGRPC(ctx context.Context, nodeInfo NodeResourceInfo) (float64, error) {
+	// Create prediction request
+	request := &proto.PredictionRequest{
+		CpuModel:        nodeInfo.CPUModel,
+		RamCapacityGb:   float64(nodeInfo.MemoryTotal) / (1024 * 1024 * 1024), // Convert bytes to GB
+		CpuFreqMhz:      int32(nodeInfo.CPUFreq),
+		NumCores:        int32(nodeInfo.CPUTotal / 1000),   // Convert millicores to cores
+		AchievedLoadPct: float64(nodeInfo.CPUUsedPct + 10), // Add 10% to achieved load
+	}
 
-*/
+	// Call gRPC service with timeout
+	grpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
-func LoadEnergyModel(modelPath string) (goscore.RandomForest, error) {
-	modelXml, _ := os.ReadFile(modelPath)
-	var model goscore.RandomForest // or goscore.GradientBoostedModel
-	xml.Unmarshal([]byte(modelXml), &model)
-	return model, nil
-}
-
-func ConvertCPUModel(cpuModel string) float32 {
-	// Read target encoding mapping from JSON file
-	jsonData, err := os.ReadFile("models/target_encoding_model.json")
+	response, err := pl.grpcClient.PredictPower(grpcCtx, request)
 	if err != nil {
-		return 0 // Return default value on error
+		return 0, fmt.Errorf("gRPC call failed: %w", err)
 	}
 
-	// Parse JSON into map
-	var targetEncodings map[string]float32
-	if err := json.Unmarshal(jsonData, &targetEncodings); err != nil {
-		return 0 // Return default value on error
+	if response.Status != "success" {
+		return 0, fmt.Errorf("prediction failed: %s", response.Error)
 	}
 
-	// Look up mean target encoding value for CPU model
-	if meanValue, exists := targetEncodings[cpuModel]; exists {
-		return meanValue
-	}
-
-	return 0 // Return default value if CPU model not found
-}
-
-func GetEnergyScore(nodeInfo NodeResourceInfo) (float64, error) {
-	// Create features map for prediction
-	features := map[string]interface{}{
-		"CPU_Model":         230,
-		"RAM_Capacity_GB":   nodeInfo.MemoryTotal / (1024 * 1024 * 1024), // Convert bytes to GB
-		"CPU_Freq_MHz":      nodeInfo.CPUFreq,
-		"Num_Cores":         nodeInfo.CPUTotal / 1000, // Convert millicores to cores
-		"Achieved_Load_Pct": nodeInfo.CPUUsedPct + 10, // Add 10% to the achieved load percentage
-	}
-
-	model, err := LoadEnergyModel("models/rf.pmml")
-	if err != nil {
-		klog.ErrorS(err, "Failed to load energy model")
-		return 0, err
-	}
-	klog.Infof("model: %v", model.XMLName)
-	klog.Infof("Features: %v", features)
-	// Get prediction from model
-	prediction, err := model.Score(features, "1")
-	if err != nil {
-		return 0, err
-	}
-
-	klog.Infof("Energy score: %v", prediction)
-
-	return prediction, nil
+	return response.PredictedPowerWatts, nil
 }
