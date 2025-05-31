@@ -39,7 +39,7 @@ func calculateNetworkCost(nodeName string) float64 {
 
 // getCPUModelEncoding provides a mock implementation for encoding CPU models.
 // Replace this with the actual logic for encoding CPU models.
-func getCPUModelEncoding(cpuModel string) float64 {
+func GetCPUModelEncoding(cpuModel string) float64 {
 	cpuAvg, err := base.SearchJSONKey("models/cpu_models.json", base.CleanCPUModelName(cpuModel))
 	if err != nil {
 		cpuAvg = 200.10
@@ -50,7 +50,7 @@ func getCPUModelEncoding(cpuModel string) float64 {
 // extractFeatures extracts features from the cluster state for the given node and convert it into a format for leaves
 func extractFeatures(nodeState *base.NodeResourceInfo, nodeName string) ([]float64, error) {
 	// Get the target encoding of the cpu model
-	cpuAvg := getCPUModelEncoding(nodeState.CPUModel)
+	cpuAvg := GetCPUModelEncoding(nodeState.CPUModel)
 
 	fmt.Printf(">>>> CPU model: %s, encoding: %v\n", nodeState.CPUModel, cpuAvg)
 

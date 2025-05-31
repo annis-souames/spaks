@@ -1,212 +1,356 @@
-package drlScheduler
+package drlScheduler // Or your package name
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"math/rand"
+	"net/http"
+	"strings"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
+	framework "k8s.io/kubernetes/pkg/scheduler/framework"
+
+	// Your base and energy packages
 	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/base"
 	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/energy"
 )
 
 const (
-	// Name is the plugin name used in logs and configuration.
-	Name = "DRL"
+	drlScorerPluginName = "DRL"
+	pythonServerURL     = "http://172.17.0.1:5001/predict_node_scores" // URL of your Flask server running on host
+	// cpuModelUnknown        = "Unknown" // Defined in logger
+	// nodeTypeLabelKey       = "type"    // Defined in logger
+	// nodeTypeCloud          = "cloud"   // Defined in logger
+	// nodeTypeEdge           = "edge"    // Defined in logger
 )
 
-// Ensure we implement the Score extension.
-var _ framework.ScorePlugin = &DRLScorer{}
-var _ framework.PreScorePlugin = &DRLScorer{}
+const (
+	Name = drlScorerPluginName // Name of the plugin, used in scheduler config
+)
 
-// NodeResourceInfo holds resource information for a node
-
-// ClusterState holds resource information for all nodes
-type ClusterState struct {
-	Nodes     []base.NodeResourceInfo `json:"nodes"`
-	Timestamp int64                   `json:"timestamp"`
+// DRLScorerPlugin uses a DRL model to score nodes.
+type DRLScorerPlugin struct {
+	handle     framework.Handle
+	httpClient *http.Client // Re-use HTTP client
 }
 
-// energyScoreState holds the energy scores for nodes
-type energyScoreState struct {
-	scores map[string]float64
+var _ framework.PreScorePlugin = &DRLScorerPlugin{}
+var _ framework.ScorePlugin = &DRLScorerPlugin{}
+
+// Name is the name of the plugin.
+func (dsp *DRLScorerPlugin) Name() string {
+	return drlScorerPluginName
 }
 
 // New initializes a new plugin and returns it.
-// New initializes the plugin.
-// New initializes the plugin.
-func New(_ context.Context, arg runtime.Object, h framework.Handle) (framework.Plugin, error) {
-	// You could parse arguments here if needed, similar to the NodeNumber example
-	// var args SomeArgsType
-	// if arg != nil {
-	//     err := frameworkruntime.DecodeInto(arg, &args)
-	//     if err != nil {
-	//         return nil, fmt.Errorf("failed to decode args: %w", err)
-	//     }
-	// }
-
-	return &DRLScorer{handle: h}, nil
+func New(context context.Context, _ runtime.Object, h framework.Handle) (framework.Plugin, error) {
+	return &DRLScorerPlugin{
+		handle: h,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second, // Example timeout
+		},
+	}, nil
 }
 
-// Clone implements the StateData interface
-func (e *energyScoreState) Clone() framework.StateData {
-	if e == nil {
-		return nil
+// --- Helper functions (similar to your logger, but adapted for DRLScorer state prep) ---
+
+func (dsp *DRLScorerPlugin) getPodInfoForDRL(pod *v1.Pod) map[string]interface{} {
+	cpuMillis, memMib := int64(0), int64(0)
+	for _, container := range pod.Spec.Containers {
+		if container.Resources.Requests != nil {
+			cpuMillis += container.Resources.Requests.Cpu().MilliValue()
+			memMib += container.Resources.Requests.Memory().Value() / (1024 * 1024)
+		}
 	}
-	newScores := make(map[string]float64, len(e.scores))
-	for k, v := range e.scores {
-		newScores[k] = v
+	return map[string]interface{}{
+		"pod_cpu_request":     cpuMillis / 1000,
+		"pod_ram_request_mib": memMib,
 	}
-	return &energyScoreState{scores: newScores}
 }
 
-// DRLScorer holds the scheduler handle for accessing the snapshot.
-type DRLScorer struct {
-	handle framework.Handle
-}
-
-// Name returns the plugin's name.
-func (pl *DRLScorer) Name() string {
-	return Name
-}
-
-// calculateNodeResources calculates total and remaining resources for each node
-func (pl *DRLScorer) calculateNodeResources(ctx context.Context) (*ClusterState, error) {
-	snapshot := pl.handle.SnapshotSharedLister()
-	if snapshot == nil {
-		return nil, fmt.Errorf("snapshot is nil")
+func (dsp *DRLScorerPlugin) getNodeFeaturesForDRL(nodeInfo *framework.NodeInfo, podToPlace *v1.Pod) (map[string]interface{}, error) {
+	node := nodeInfo.Node()
+	if node == nil {
+		return nil, fmt.Errorf("node is nil in NodeInfo for %s", nodeInfo.Node().Name) // Should not happen if nodeInfo is valid
 	}
 
-	nodeInfos, err := snapshot.NodeInfos().List()
+	// Use the same resource info calculation as your logger for consistency
+	// This gets current node state, and hypothetical state if podToPlace is added
+	resourceCurrent, resourceHypotheticalAfterPod := dsp.getNodeResourceInfo(nodeInfo, podToPlace)
+
+	// LGBM prediction for this node IF the podToPlace were placed on it.
+	// This is the 'energy_before' feature for the DRL state.
+	// It should use resourceHypotheticalAfterPod's load to predict the energy
+	// if the pod *were* placed there.
+	// Let's rename for clarity: energyIfPodPlaced
+	energyIfPodPlaced, err := energy.PredictEnergyConsumption(&resourceHypotheticalAfterPod, node.Name)
 	if err != nil {
-		return nil, fmt.Errorf("error listing nodes: %v", err)
+		klog.Warningf("DRLScorer: Error predicting energy for node %s with pod %s: %v. Using high energy.", node.Name, podToPlace.Name, err)
+		energyIfPodPlaced = 10000.0 // Assign a high (bad) energy if prediction fails
 	}
 
-	clusterState := &ClusterState{
-		Nodes:     make([]base.NodeResourceInfo, 0, len(nodeInfos)),
-		Timestamp: time.Now().Unix(),
+	nodeTypeStr := "unknown"
+	if strings.Contains(strings.ToLower(node.Name), "cloud") {
+		nodeTypeStr = "cloud"
+	} else if strings.Contains(strings.ToLower(node.Name), "edge") {
+		nodeTypeStr = "edge"
 	}
 
-	for _, nodeInfo := range nodeInfos {
-		if nodeInfo == nil || nodeInfo.Node() == nil {
+	cpuModelEnergyVal := dsp.getCPUEnergyValue(node) // Same as logger's helper
+
+	return map[string]interface{}{
+		"candidate_node_name":                 node.Name,
+		"node_cpu_total":                      resourceCurrent.CPUTotal / 1000, // Total capacity
+		"node_ram_total_mib":                  resourceCurrent.MemoryTotal / (1024 * 1024),
+		"node_cpu_model_energy_val":           cpuModelEnergyVal,
+		"node_type":                           nodeTypeStr,
+		"energy_before_pod_placement_on_node": energyIfPodPlaced, // Crucial: energy *if* this pod lands here
+		// Add other features if your DRL model expects them (e.g., current load before pod)
+		// "node_cpu_allocatable_milli_before_pod": nodeInfo.Allocatable.MilliCPU,
+		// "node_ram_allocatable_mib_before_pod": nodeInfo.Allocatable.Memory / (1024*1024),
+	}, nil
+}
+
+// Helper: getCPUEnergyValue
+func (dsp *DRLScorerPlugin) getCPUEnergyValue(node *v1.Node) float64 {
+	cpuModel := base.CleanCPUModelName(node.Labels["cpu-model"]) // Ensure label key is correct
+	cpuAvg := energy.GetCPUModelEncoding(cpuModel)               // Use the same encoding logic as in your logger
+
+	return cpuAvg
+}
+
+// Helper: getNodeResourceInfo (same as in your logger or adapted)
+func (dsp *DRLScorerPlugin) getNodeResourceInfo(nodeInfo *framework.NodeInfo, podForHypotheticalPlacement *v1.Pod) (current base.NodeResourceInfo, hypotheticalAfterPlacement base.NodeResourceInfo) {
+	node := nodeInfo.Node()
+	if node == nil {
+		return
+	} // Should be checked by caller
+
+	cpuCapacity := node.Status.Capacity.Cpu().MilliValue()
+	memCapacityBytes := node.Status.Capacity.Memory().Value()
+	currentCpuUsed := nodeInfo.Requested.MilliCPU
+	currentMemUsedBytes := nodeInfo.Requested.Memory
+
+	current.NodeName = node.Name
+	current.CPUModel = base.CleanCPUModelName(node.Labels["cpu-model"])
+	current.CPUFreq = rand.Int63n(3200-2600) + 2600
+	current.CPUTotal = cpuCapacity
+	if cpuCapacity > 0 {
+		current.CPUUsedPct = (currentCpuUsed * 100) / cpuCapacity
+	}
+	current.MemoryTotal = memCapacityBytes
+	if memCapacityBytes > 0 {
+		current.MemUsedPct = (currentMemUsedBytes * 100) / memCapacityBytes
+	}
+
+	hypotheticalAfterPlacement = current
+	podCPUReq, podMemReqBytes := int64(0), int64(0)
+	if podForHypotheticalPlacement != nil {
+		tempPodCpu, tempPodMemMib := dsp.getPodResourceRequestsForDRL(podForHypotheticalPlacement) // Use specific helper if needed
+		podCPUReq = tempPodCpu
+		podMemReqBytes = tempPodMemMib * 1024 * 1024
+	}
+	hypotheticalCpuUsed := currentCpuUsed + podCPUReq
+	hypotheticalMemUsedBytes := currentMemUsedBytes + podMemReqBytes
+	if cpuCapacity > 0 {
+		hypotheticalAfterPlacement.CPUUsedPct = (hypotheticalCpuUsed * 100) / cpuCapacity
+	}
+	if memCapacityBytes > 0 {
+		hypotheticalAfterPlacement.MemUsedPct = (hypotheticalMemUsedBytes * 100) / memCapacityBytes
+	}
+	return
+}
+
+// Helper: getPodResourceRequestsForDRL (same as your logger's getPodResourceRequests)
+func (dsp *DRLScorerPlugin) getPodResourceRequestsForDRL(pod *v1.Pod) (cpuMillis int64, memMib int64) {
+	for _, container := range pod.Spec.Containers {
+		if container.Resources.Requests != nil {
+			cpuMillis += container.Resources.Requests.Cpu().MilliValue()
+			memMib += container.Resources.Requests.Memory().Value() / (1024 * 1024)
+		}
+	}
+	return
+}
+
+// DRLPreScoreStateKey is a key for CycleState.
+const DRLPreScoreStateKey framework.StateKey = "DRLPreScoreState"
+
+// DRLPreScoreData holds the scores received from the Python server.
+type DRLPreScoreData struct {
+	NodeScores map[string]float64 // nodeName -> score
+}
+
+// Clone an DRLPreScoreData.
+func (d *DRLPreScoreData) Clone() framework.StateData {
+	return &DRLPreScoreData{
+		NodeScores: d.NodeScores, // Shallow copy is fine if map is not modified after set
+	}
+}
+
+// PreScore phase: Collect all candidate node states and send to Python DRL server.
+func (dsp *DRLScorerPlugin) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
+	if len(nodes) == 0 {
+		return framework.NewStatus(framework.Success, "No candidate nodes for DRL PreScore.")
+	}
+
+	podInfoForDRL := dsp.getPodInfoForDRL(pod)
+	candidateNodesDataForDRL := make([]map[string]interface{}, 0, len(nodes))
+
+	for _, node := range nodes {
+		nodeInfo, err := dsp.handle.SnapshotSharedLister().NodeInfos().Get(node.Node().Name)
+		if err != nil {
+			klog.Warningf("DRLScorer: Error getting NodeInfo for %s in PreScore: %v. Skipping node.", node.Node().Name, err)
+			continue
+		}
+		if nodeInfo.Node() == nil { // Should not happen if node came from framework
+			klog.Warningf("DRLScorer: NodeInfo for %s has nil Node object in PreScore. Skipping node.", node.Node().Name)
 			continue
 		}
 
-		node := nodeInfo.Node()
-
-		// Get capacity from node status
-		cpuCapacity := node.Status.Capacity.Cpu().MilliValue()
-		memCapacity := node.Status.Capacity.Memory().Value()
-
-		// Calculate used resources by summing up all pod requests
-		var cpuUsed, memUsed int64
-		for _, podInfo := range nodeInfo.Pods {
-			if podInfo == nil || podInfo.Pod == nil {
-				continue
-			}
-
-			for _, container := range podInfo.Pod.Spec.Containers {
-				cpuUsed += container.Resources.Requests.Cpu().MilliValue()
-				memUsed += container.Resources.Requests.Memory().Value()
-			}
-		}
-
-		// Calculate remaining resources
-		cpuRemaining := cpuCapacity - cpuUsed
-		memRemaining := memCapacity - memUsed
-
-		// Calculate used percentage
-		cpuUsedPct := (cpuUsed * 100) / cpuCapacity
-		memUsedPct := (memUsed * 100) / memCapacity
-
-		cpuFreq := rand.Int63n(3200-2600) + 2600 // Example frequency in MHz between 2600 and 3200
-
-		nodeResourceInfo := base.NodeResourceInfo{
-			NodeName:        node.Name,
-			CPUModel:        node.Labels["cpu_model"],
-			CPUFreq:         cpuFreq, // Example frequency in MHz
-			CPUTotal:        cpuCapacity,
-			CPURemaining:    cpuRemaining,
-			CPUUsedPct:      cpuUsedPct,
-			MemoryTotal:     memCapacity,
-			MemoryRemaining: memRemaining,
-			MemUsedPct:      memUsedPct,
-		}
-		klog.Infof("Node %s: CPU Total: %d, CPU Remaining: %d, Memory Total: %d, Memory Remaining: %d",
-			node.Name, cpuCapacity, cpuRemaining, memCapacity, memRemaining)
-		clusterState.Nodes = append(clusterState.Nodes, nodeResourceInfo)
-	}
-
-	return clusterState, nil
-}
-
-// PreScore is called before Score to calculate and send resource information once per scheduling cycle
-func (pl *DRLScorer) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
-	// Calculate energy score for each node based on the functions in energy.go and the information clusterState (might need to node per node)
-	nodeState, err := pl.calculateNodeResources(ctx)
-	energyScores := make(map[string]float64)
-	if err != nil {
-		klog.ErrorS(err, "Failed to calculate node resources")
-		return framework.NewStatus(framework.Error)
-	}
-
-	for _, nodeInfo := range nodeState.Nodes {
-		energyScore, err := energy.PredictEnergyConsumption(&nodeInfo, nodeInfo.NodeName)
+		// Get features for this node AS IF the current pod was placed on it
+		nodeFeatures, err := dsp.getNodeFeaturesForDRL(nodeInfo, pod)
 		if err != nil {
-			klog.ErrorS(err, "Failed to calculate energy score via LightGBM model", "node", nodeInfo.NodeName)
-			return framework.NewStatus(framework.Error)
+			klog.Warningf("DRLScorer: Error getting features for node %s in PreScore: %v. Skipping node.", node.Node().Name, err)
+			continue
 		}
-		klog.V(4).InfoS("Energy score calculated", "node", nodeInfo.NodeName, "score", energyScore)
-		energyScores[nodeInfo.NodeName] = energyScore
+		candidateNodesDataForDRL = append(candidateNodesDataForDRL, nodeFeatures)
 	}
 
-	// Save the energy score for each node in the cycle state
-	state.Write("energyScore", &energyScoreState{scores: energyScores})
-
-	return nil
-}
-
-// EventsToRegister returns the events to register
-func (pl *DRLScorer) EventsToRegister() []framework.ClusterEvent {
-	return []framework.ClusterEvent{
-		{Resource: framework.Node, ActionType: framework.Add},
-		{Resource: framework.Node, ActionType: framework.Update},
-		{Resource: framework.Pod, ActionType: framework.Add},
-		{Resource: framework.Pod, ActionType: framework.Update},
-		{Resource: framework.Pod, ActionType: framework.Delete},
+	if len(candidateNodesDataForDRL) == 0 {
+		klog.Warningf("DRLScorer: No valid candidate node data to send for pod %s/%s.", pod.Namespace, pod.Name)
+		// Store empty scores so Score phase knows nothing was processed
+		state.Write(DRLPreScoreStateKey, &DRLPreScoreData{NodeScores: make(map[string]float64)})
+		return framework.NewStatus(framework.Success)
 	}
-}
 
-// Score generates a random score for the node
-func (pl *DRLScorer) Score(
-	ctx context.Context,
-	state *framework.CycleState,
-	pod *v1.Pod,
-	nodeName string,
-) (int64, *framework.Status) {
-	klog.InfoS("Execute Score on DRL plugin", "pod", klog.KObj(pod), "node", nodeName)
+	requestPayload := map[string]interface{}{
+		"pod_info":        podInfoForDRL,
+		"candidate_nodes": candidateNodesDataForDRL,
+	}
 
-	// Get the energy scores from the cycle state
-	energyScores, err := state.Read("energyScore")
+	payloadBytes, err := json.Marshal(requestPayload)
 	if err != nil {
-		return 0, framework.NewStatus(framework.Error)
-	}
-	// return the energy score for the node
-	energyScore := energyScores.(*energyScoreState)
-	if energyScore == nil {
-		return 0, framework.NewStatus(framework.Error)
+		klog.Errorf("DRLScorer: Error marshalling request payload for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+		return framework.NewStatus(framework.Error, "Failed to prepare DRL request.")
 	}
 
-	// Get the energy score for the node
-	score := energyScore.scores[nodeName]
-	return int64(score), framework.NewStatus(framework.Success)
+	req, err := http.NewRequestWithContext(ctx, "POST", pythonServerURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		klog.Errorf("DRLScorer: Error creating request for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+		return framework.NewStatus(framework.Error, "Failed to create DRL request.")
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := dsp.httpClient.Do(req)
+	if err != nil {
+		klog.Errorf("DRLScorer: Error sending request to Python server for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+		return framework.NewStatus(framework.Error, "DRL server request failed.")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		klog.Errorf("DRLScorer: Python server returned error %d for pod %s/%s: %s", resp.StatusCode, pod.Namespace, pod.Name, string(bodyBytes))
+		return framework.NewStatus(framework.Error, fmt.Sprintf("DRL server error: %d", resp.StatusCode))
+	}
+
+	var responseData map[string]map[string]float64
+	if err := json.NewDecoder(resp.Body).Decode(&responseData); err != nil {
+		klog.Errorf("DRLScorer: Error decoding Python server response for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+		return framework.NewStatus(framework.Error, "Failed to decode DRL response.")
+	}
+
+	nodeScores, ok := responseData["node_scores"]
+	if !ok {
+		klog.Errorf("DRLScorer: 'node_scores' not found in Python server response for pod %s/%s.", pod.Namespace, pod.Name)
+		return framework.NewStatus(framework.Error, "Invalid DRL response format.")
+	}
+
+	klog.V(4).Infof("DRLScorer: Received scores for pod %s/%s: %v", pod.Namespace, pod.Name, nodeScores)
+	state.Write(DRLPreScoreStateKey, &DRLPreScoreData{NodeScores: nodeScores})
+	return framework.NewStatus(framework.Success)
 }
 
-// ScoreExtensions returns nil as we don't implement NormalizeScore.
-func (pl *DRLScorer) ScoreExtensions() framework.ScoreExtensions {
+// Score retrieves the DRL score from CycleState (populated by PreScore).
+func (dsp *DRLScorerPlugin) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+	data, err := state.Read(DRLPreScoreStateKey)
+	if err != nil {
+		klog.Errorf("DRLScorer: Error reading DRLPreScoreStateKey from cycle state for pod %s/%s, node %s: %v", pod.Namespace, pod.Name, nodeName, err)
+		return framework.MinNodeScore, framework.AsStatus(fmt.Errorf("reading DRLPreScoreStateKey: %w", err))
+	}
+
+	preScoreData, ok := data.(*DRLPreScoreData)
+	if !ok {
+		klog.Errorf("DRLScorer: Invalid data type for DRLPreScoreStateKey for pod %s/%s, node %s", pod.Namespace, pod.Name, nodeName)
+		return framework.MinNodeScore, framework.AsStatus(fmt.Errorf("invalid data type for DRLPreScoreStateKey"))
+	}
+
+	// DRL Q-values can be positive or negative. Framework scores are int64.
+	// We need to scale/convert. Higher Q-value should mean better score.
+	// A simple scaling: multiply by 100 and cast. Adjust as needed.
+	// Ensure it fits within framework.MinNodeScore and framework.MaxNodeScore if necessary.
+	// For now, a direct cast after scaling.
+	allQValues := make([]float64, 0, len(preScoreData.NodeScores))
+	for _, q := range preScoreData.NodeScores {
+		allQValues = append(allQValues, q)
+	}
+
+	if len(allQValues) == 0 {
+		// No scores were returned from DRL for any node for this pod
+		// Or this specific nodeName was not in the map (should be handled)
+		klog.V(3).Infof("DRLScorer: No Q-values available for pod %s/%s. Node %s gets MinNodeScore.", pod.Namespace, pod.Name, nodeName)
+		return framework.MinNodeScore, framework.NewStatus(framework.Success)
+	}
+
+	minQ := allQValues[0]
+	maxQ := allQValues[0]
+	for _, q := range allQValues {
+		if q < minQ {
+			minQ = q
+		}
+		if q > maxQ {
+			maxQ = q
+		}
+	}
+
+	currentQ, found := preScoreData.NodeScores[nodeName]
+	if !found {
+		klog.V(3).Infof("DRLScorer: Score for node %s not found in PreScore data for pod %s/%s. Assigning MinNodeScore.", nodeName, pod.Namespace, pod.Name)
+		return framework.MinNodeScore, framework.NewStatus(framework.Success)
+	}
+
+	var scaledScore float64
+	if maxQ == minQ { // All nodes have the same Q-value
+		scaledScore = 50.0 // Assign a neutral middle score
+	} else {
+		normalizedQ := (currentQ - minQ) / (maxQ - minQ)
+		scaledScore = normalizedQ * 100.0
+	}
+
+	intScore := int64(math.Round(scaledScore))
+
+	// Clamp to Kubernetes framework's score range
+	if intScore < framework.MinNodeScore {
+		intScore = framework.MinNodeScore
+	}
+	if intScore > framework.MaxNodeScore { // framework.MaxNodeScore is typically 100
+		intScore = framework.MaxNodeScore
+	}
+
+	klog.V(5).Infof("DRLScorer: Pod %s/%s on Node %s, DRL Q: %.2f (min:%.2f, max:%.2f), NormalizedQ: %.2f, K8s Score: %d",
+		pod.Namespace, pod.Name, nodeName, currentQ, minQ, maxQ, scaledScore/100.0, intScore)
+	return intScore, framework.NewStatus(framework.Success)
+
+}
+
+// ScoreExtensions returns nil as this plugin does not currently normalize scores.
+func (dsp *DRLScorerPlugin) ScoreExtensions() framework.ScoreExtensions {
 	return nil
 }

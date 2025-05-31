@@ -10,6 +10,7 @@ import (
 	_ "k8s.io/component-base/metrics/prometheus/version" // for version metric registration
 	"k8s.io/klog"
 
+	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler"
 	logScheduler "sigs.k8s.io/kube-scheduler-simulator/simulator/logScheduler"
 	"sigs.k8s.io/kube-scheduler-simulator/simulator/pkg/debuggablescheduler"
 	// Import the DRL scheduler plugin
@@ -18,6 +19,7 @@ import (
 func main() {
 	command, cancelFn, err := debuggablescheduler.NewSchedulerCommand(
 		debuggablescheduler.WithPlugin(logScheduler.Name, logScheduler.New),
+		debuggablescheduler.WithPlugin(drlScheduler.Name, drlScheduler.New),
 	)
 	if err != nil {
 		klog.Info(fmt.Sprintf("failed to build the debuggablescheduler command: %+v", err))
