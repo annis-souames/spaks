@@ -32,11 +32,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def encode_node_type_server(node_type_str: str) -> float:
     """Encodes node type string to float. Must match training encoding."""
     if node_type_str == 'edge':
-        return 0.0
-    elif node_type_str == 'cloud':
         return 1.0
-    else: # unknown or other
+    elif node_type_str == 'cloud':
         return 2.0
+    else: # unknown or other
+        return 0.0
 
 def load_model_and_scaler():
     global inference_model, feature_scaler

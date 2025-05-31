@@ -1,0 +1,9 @@
+Consumption: 3508.97 W
+Average Energy per Node: 175.45 W
+Cluster Average Load (weighted): 65.42%
+
+Highest Energy Consumer: edge-7 (264.41 W)
+Lowest Energy Consumer: edge-4 (89.05 W)
+
+Most Energy Efficient: edge-12 (2.137 W/%load)
+Least Energy Efficient: edge-10 (7.128 W/%load)
