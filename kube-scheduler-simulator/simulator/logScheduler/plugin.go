@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	stateLogFilePath  = "state.csv"   // For detailed state
+	stateLogFilePath  = "states.csv"  // For detailed state
 	actionLogFilePath = "actions.csv" // For chosen (pod, node) pairs
 	cpuModelUnknown   = "Unknown"
 	nodeTypeLabelKey  = "type"
@@ -162,7 +162,7 @@ func (lp *SchedulerLoggerPlugin) getCPUEnergyValue(node *v1.Node) float64 {
 	}
 
 	// Assuming SearchJSONKey returns interface{} and needs type assertion
-	cpuModelEnergyValInterface, err := base.SearchJSONKey("models/cpu_models.json", cpuModel)
+	cpuModelEnergyValInterface, err := base.SearchJSONKey("models/cpu_model.json", cpuModel)
 	if err != nil {
 		klog.Warningf("Logger: Error encoding CPU model '%s' for node %s: %v. Using default energy value.", cpuModel, node.Name, err)
 		return 200.0 // Default or error indicator value
@@ -180,7 +180,7 @@ func (lp *SchedulerLoggerPlugin) getPodResourceRequests(pod *v1.Pod) (cpuMillis 
 	for _, container := range pod.Spec.Containers {
 		if container.Resources.Requests != nil {
 			cpuMillis += container.Resources.Requests.Cpu().MilliValue()
-			memMib += container.Resources.Requests.Memory().Value() / (1024 * 1024) // Bytes to MiB
+			memMib += container.Resources.Requests.Memory().Value()
 		}
 	}
 	return

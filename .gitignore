@@ -116,7 +116,6 @@ Desktop.ini
 
 # Project specific
 # Logs
-logs/
 *.log
 
 # Local configs
