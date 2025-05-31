@@ -6,14 +6,12 @@ import (
 	"math/rand"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
-	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/proto"
+	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/base"
+	"sigs.k8s.io/kube-scheduler-simulator/simulator/drlScheduler/energy"
 )
 
 const (
@@ -22,31 +20,36 @@ const (
 )
 
 // Ensure we implement the Score extension.
-var _ framework.ScorePlugin = &ResourceAwareScorer{}
-var _ framework.PreScorePlugin = &ResourceAwareScorer{}
+var _ framework.ScorePlugin = &DRLScorer{}
+var _ framework.PreScorePlugin = &DRLScorer{}
 
 // NodeResourceInfo holds resource information for a node
-type NodeResourceInfo struct {
-	NodeName        string `json:"nodeName"`
-	CPUTotal        uint32 `json:"cpuTotal"`        // in millicores
-	CPURemaining    uint32 `json:"cpuRemaining"`    // in millicores
-	CPUUsedPct      int64  `json:"cpuUsedPct"`      // in percentage
-	CPUModel        string `json:"cpuModel"`        // CPU model name
-	CPUFreq         int64  `json:"cpuFreq"`         // CPU frequency in MHz
-	MemoryTotal     int64  `json:"memoryTotal"`     // in bytes
-	MemoryRemaining int64  `json:"memoryRemaining"` // in bytes
-	MemUsedPct      int64  `json:"memUsedPct"`      // in percentage
-}
 
 // ClusterState holds resource information for all nodes
 type ClusterState struct {
-	Nodes     []NodeResourceInfo `json:"nodes"`
-	Timestamp int64              `json:"timestamp"`
+	Nodes     []base.NodeResourceInfo `json:"nodes"`
+	Timestamp int64                   `json:"timestamp"`
 }
 
 // energyScoreState holds the energy scores for nodes
 type energyScoreState struct {
 	scores map[string]float64
+}
+
+// New initializes a new plugin and returns it.
+// New initializes the plugin.
+// New initializes the plugin.
+func New(_ context.Context, arg runtime.Object, h framework.Handle) (framework.Plugin, error) {
+	// You could parse arguments here if needed, similar to the NodeNumber example
+	// var args SomeArgsType
+	// if arg != nil {
+	//     err := frameworkruntime.DecodeInto(arg, &args)
+	//     if err != nil {
+	//         return nil, fmt.Errorf("failed to decode args: %w", err)
+	//     }
+	// }
+
+	return &DRLScorer{handle: h}, nil
 }
 
 // Clone implements the StateData interface
@@ -61,38 +64,18 @@ func (e *energyScoreState) Clone() framework.StateData {
 	return &energyScoreState{scores: newScores}
 }
 
-// ResourceAwareScorer holds the scheduler handle for accessing the snapshot.
-type ResourceAwareScorer struct {
-	handle     framework.Handle
-	grpcClient proto.EnergyServiceClient
-	grpcConn   *grpc.ClientConn
+// DRLScorer holds the scheduler handle for accessing the snapshot.
+type DRLScorer struct {
+	handle framework.Handle
 }
 
 // Name returns the plugin's name.
-func (pl *ResourceAwareScorer) Name() string {
+func (pl *DRLScorer) Name() string {
 	return Name
 }
 
-// New initializes the plugin.
-func New(_ context.Context, arg runtime.Object, h framework.Handle) (framework.Plugin, error) {
-	// Establish gRPC connection to energy server
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		klog.ErrorS(err, "Failed to connect to energy service")
-		return nil, fmt.Errorf("failed to connect to energy service: %w", err)
-	}
-
-	client := proto.NewEnergyServiceClient(conn)
-
-	return &ResourceAwareScorer{
-		handle:     h,
-		grpcClient: client,
-		grpcConn:   conn,
-	}, nil
-}
-
 // calculateNodeResources calculates total and remaining resources for each node
-func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*ClusterState, error) {
+func (pl *DRLScorer) calculateNodeResources(ctx context.Context) (*ClusterState, error) {
 	snapshot := pl.handle.SnapshotSharedLister()
 	if snapshot == nil {
 		return nil, fmt.Errorf("snapshot is nil")
@@ -104,7 +87,7 @@ func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*Clu
 	}
 
 	clusterState := &ClusterState{
-		Nodes:     make([]NodeResourceInfo, 0, len(nodeInfos)),
+		Nodes:     make([]base.NodeResourceInfo, 0, len(nodeInfos)),
 		Timestamp: time.Now().Unix(),
 	}
 
@@ -142,12 +125,12 @@ func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*Clu
 
 		cpuFreq := rand.Int63n(3200-2600) + 2600 // Example frequency in MHz between 2600 and 3200
 
-		nodeResourceInfo := NodeResourceInfo{
+		nodeResourceInfo := base.NodeResourceInfo{
 			NodeName:        node.Name,
 			CPUModel:        node.Labels["cpu_model"],
 			CPUFreq:         cpuFreq, // Example frequency in MHz
-			CPUTotal:        uint32(cpuCapacity),
-			CPURemaining:    uint32(cpuRemaining),
+			CPUTotal:        cpuCapacity,
+			CPURemaining:    cpuRemaining,
 			CPUUsedPct:      cpuUsedPct,
 			MemoryTotal:     memCapacity,
 			MemoryRemaining: memRemaining,
@@ -162,19 +145,19 @@ func (pl *ResourceAwareScorer) calculateNodeResources(ctx context.Context) (*Clu
 }
 
 // PreScore is called before Score to calculate and send resource information once per scheduling cycle
-func (pl *ResourceAwareScorer) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
+func (pl *DRLScorer) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
 	// Calculate energy score for each node based on the functions in energy.go and the information clusterState (might need to node per node)
-	clusterState, err := pl.calculateNodeResources(ctx)
+	nodeState, err := pl.calculateNodeResources(ctx)
 	energyScores := make(map[string]float64)
 	if err != nil {
 		klog.ErrorS(err, "Failed to calculate node resources")
 		return framework.NewStatus(framework.Error)
 	}
 
-	for _, nodeInfo := range clusterState.Nodes {
-		energyScore, err := pl.getEnergyScoreViaGRPC(ctx, nodeInfo)
+	for _, nodeInfo := range nodeState.Nodes {
+		energyScore, err := energy.PredictEnergyConsumption(&nodeInfo, nodeInfo.NodeName)
 		if err != nil {
-			klog.ErrorS(err, "Failed to calculate energy score via gRPC", "node", nodeInfo.NodeName)
+			klog.ErrorS(err, "Failed to calculate energy score via LightGBM model", "node", nodeInfo.NodeName)
 			return framework.NewStatus(framework.Error)
 		}
 		klog.V(4).InfoS("Energy score calculated", "node", nodeInfo.NodeName, "score", energyScore)
@@ -188,7 +171,7 @@ func (pl *ResourceAwareScorer) PreScore(ctx context.Context, state *framework.Cy
 }
 
 // EventsToRegister returns the events to register
-func (pl *ResourceAwareScorer) EventsToRegister() []framework.ClusterEvent {
+func (pl *DRLScorer) EventsToRegister() []framework.ClusterEvent {
 	return []framework.ClusterEvent{
 		{Resource: framework.Node, ActionType: framework.Add},
 		{Resource: framework.Node, ActionType: framework.Update},
@@ -199,7 +182,7 @@ func (pl *ResourceAwareScorer) EventsToRegister() []framework.ClusterEvent {
 }
 
 // Score generates a random score for the node
-func (pl *ResourceAwareScorer) Score(
+func (pl *DRLScorer) Score(
 	ctx context.Context,
 	state *framework.CycleState,
 	pod *v1.Pod,
@@ -224,33 +207,6 @@ func (pl *ResourceAwareScorer) Score(
 }
 
 // ScoreExtensions returns nil as we don't implement NormalizeScore.
-func (pl *ResourceAwareScorer) ScoreExtensions() framework.ScoreExtensions {
+func (pl *DRLScorer) ScoreExtensions() framework.ScoreExtensions {
 	return nil
-}
-
-// getEnergyScoreViaGRPC requests energy prediction from the gRPC server
-func (pl *ResourceAwareScorer) getEnergyScoreViaGRPC(ctx context.Context, nodeInfo NodeResourceInfo) (float64, error) {
-	// Create prediction request
-	request := &proto.PredictionRequest{
-		CpuModel:        nodeInfo.CPUModel,
-		RamCapacityGb:   float64(nodeInfo.MemoryTotal) / (1024 * 1024 * 1024), // Convert bytes to GB
-		CpuFreqMhz:      int32(nodeInfo.CPUFreq),
-		NumCores:        int32(nodeInfo.CPUTotal / 1000),   // Convert millicores to cores
-		AchievedLoadPct: float64(nodeInfo.CPUUsedPct + 10), // Add 10% to achieved load
-	}
-
-	// Call gRPC service with timeout
-	grpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	response, err := pl.grpcClient.PredictPower(grpcCtx, request)
-	if err != nil {
-		return 0, fmt.Errorf("gRPC call failed: %w", err)
-	}
-
-	if response.Status != "success" {
-		return 0, fmt.Errorf("prediction failed: %s", response.Error)
-	}
-
-	return response.PredictedPowerWatts, nil
 }

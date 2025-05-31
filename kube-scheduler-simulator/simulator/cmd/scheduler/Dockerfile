@@ -1,4 +1,4 @@
-FROM golang:1.22 AS build-env
+FROM golang:1.23.0 AS build-env
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -11,7 +11,6 @@ RUN go env -w GOCACHE=/go-cache
 RUN go env -w GOMODCACHE=/gomod-cache
 
 WORKDIR /go/src/simulator
-
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/gomod-cache go mod download
 
@@ -22,6 +21,10 @@ RUN --mount=type=cache,target=/gomod-cache --mount=type=cache,target=/go-cache \
 FROM alpine:3.14.0
 
 COPY --from=build-env /go/src/simulator/bin/scheduler /scheduler
+COPY cmd/scheduler/models ./models
+
+
 RUN chmod a+x /scheduler
+
 
 CMD ["/scheduler", "--config", "/config/scheduler.yaml", "--master", "http://simulator-cluster:3131"]

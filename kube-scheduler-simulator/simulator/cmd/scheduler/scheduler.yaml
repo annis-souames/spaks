@@ -3,10 +3,10 @@ apiVersion: kubescheduler.config.k8s.io/v1
 profiles:
   - schedulerName: default-scheduler
     plugins:
-      preScore:
-        enabled:
-          - name: DRL
       score:
         enabled:
-          - name: DRL
-            weight: 20
+          - name: Logger
+            weight: 1
+      postBind:
+        enabled:
+          - name: Logger
