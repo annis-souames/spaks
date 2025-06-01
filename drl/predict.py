@@ -7,7 +7,7 @@ import pickle
 import os
 
 # --- Configuration ---
-MODEL_PATH = "models/dqn_model.pth" # Path to your saved best model
+MODEL_PATH = "models/dqn_scheduler_new.pth" # Path to your saved best model
 SCALER_PATH = "models/scaler.pkl"     # Path to your saved scaler
 N_OBSERVATIONS = 7 # Must match the number of features your model was trained on
 
