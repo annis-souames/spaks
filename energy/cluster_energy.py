@@ -45,7 +45,7 @@ def load_cpu_model_encoding():
     Load the CPU model mean target encoding from JSON file.
     """
     try:
-        with open('cpu_model.json', 'r') as f:
+        with open('cpu_models.json', 'r') as f:
             encoding = json.load(f)
         print("CPU model encoding loaded successfully")
         return encoding
@@ -274,9 +274,9 @@ def predict_energy_consumption(node_info, load_pct, model, cpu_encoding):
     # ['CPU_Model', 'RAM_Capacity_GB', 'CPU_Freq_MHz', 'Num_Cores', 'Achieved_Load_Pct']
     features = np.array([[
         cpu_model_encoded,                           # CPU_Model (encoded)
-        node_info.get('ram_capacity_gb', 8.0),      # RAM_Capacity_GB
+        node_info.get('ram_capacity_gb', 8.0) * (1024*1024*1024),      # RAM_Capacity in bytes
         node_info.get('cpu_freq_mhz', 2400),        # CPU_Freq_MHz
-        node_info.get('num_cores', 2),              # Num_Cores
+        node_info.get('num_cores', 2) * 1000,              # Num_Cores
         load_pct * 100                              # Achieved_Load_Pct (convert to percentage)
     ]])
     print(f"Predicting energy consumption for node {node_info['name']} with features: {features[0]}")
@@ -390,8 +390,8 @@ if __name__ == "__main__":
     if not os.path.exists('pickle/lgbm.txt'):
         print("Warning: LightGBM model file 'pickle/lgbm.txt' not found")
     
-    if not os.path.exists('cpu_model.json'):
-        print("Warning: CPU model encoding file 'cpu_model.json' not found")
+    if not os.path.exists('cpu_models.json'):
+        print("Warning: CPU model encoding file 'cpu_models.json' not found")
     
     # Measure cluster load and energy consumption
     cluster_results = measure_cluster_load()

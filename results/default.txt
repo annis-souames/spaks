@@ -1,12 +1,9 @@
-Total Cluster Energy Consumption: 3307.47 W
-Average Energy per Node: 165.37 W
+Total Cluster Energy Consumption: 4859.53 W
+Average Energy per Node: 242.98 W
 Cluster Average Load (weighted): 65.42%
 
-Highest Energy Consumer: cloud-7 (307.66 W)
-Lowest Energy Consumer: edge-4 (89.05 W)
+Highest Energy Consumer: cloud-7 (591.49 W)
+Lowest Energy Consumer: edge-2 (91.72 W)
 
-Most Energy Efficient: cloud-6 (2.614 W/%load)
-Least Energy Efficient: edge-11 (4.351 W/%load)
-
-Number of edge nodes used: 3/12
-Number of cloud node used: 8/8
+Most Energy Efficient: cloud-4 (3.256 W/%load)
+Least Energy Efficient: cloud-2 (6.888 W/%load)
