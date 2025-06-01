@@ -41,8 +41,13 @@ func calculateNetworkCost(nodeName string) float64 {
 // Replace this with the actual logic for encoding CPU models.
 func GetCPUModelEncoding(cpuModel string) float64 {
 	cpuAvg, err := base.SearchJSONKey("models/cpu_models.json", base.CleanCPUModelName(cpuModel))
-	if err != nil {
+	if err != nil && !strings.Contains(cpuModel, "cloud") {
+		// If the CPU model is not found in the JSON file, return a default value for cloud nodes
 		cpuAvg = 200.10
+	}
+	if err != nil && strings.Contains(cpuModel, "edge") {
+		// If the CPU model is not found in the JSON file, return a default value for edge nodes
+		cpuAvg = 50.50
 	}
 	return cpuAvg.(float64)
 }

@@ -157,22 +157,7 @@ func CloseSchedLogger() {
 func (lp *SchedulerLoggerPlugin) getCPUEnergyValue(node *v1.Node) float64 {
 	// Ensure you have a label like "cpu-model" on your nodes or adjust this.
 	cpuModel := base.CleanCPUModelName(node.Labels["cpu-model"])
-	if cpuModel == "" {
-		cpuModel = cpuModelUnknown
-	}
-
-	// Assuming SearchJSONKey returns interface{} and needs type assertion
-	cpuModelEnergyValInterface, err := base.SearchJSONKey("models/cpu_model.json", cpuModel)
-	if err != nil {
-		klog.Warningf("Logger: Error encoding CPU model '%s' for node %s: %v. Using default energy value.", cpuModel, node.Name, err)
-		return 200.0 // Default or error indicator value
-	}
-
-	cpuModelEnergyVal, ok := cpuModelEnergyValInterface.(float64)
-	if !ok {
-		klog.Warningf("Logger: CPU model energy value for '%s' (node %s) is not a float64: %T. Using default.", cpuModel, node.Name, cpuModelEnergyValInterface)
-		return 200.0 // Default or error indicator value
-	}
+	cpuModelEnergyVal := energy.GetCPUModelEncoding(cpuModel)
 	return cpuModelEnergyVal
 }
 
