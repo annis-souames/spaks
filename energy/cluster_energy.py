@@ -9,6 +9,7 @@ import csv
 import subprocess
 import json
 import re
+import random
 
 # Read the nodes from ../infra/resources/nodes.csv
 def getNodes():
@@ -250,6 +251,12 @@ def getLoadOfNode(node_name: str, node_cpu_capacity: int):
     
     return load
 
+def get_network_cost(node_info):
+    if 'cloud' in node_info["name"].lower():
+        return random.randint(500, 1200) # Simulate higher costs for cloud nodes
+    elif 'edge' in node_info["name"].lower():
+        return random.randint(20, 70)
+
 def predict_energy_consumption(node_info, load_pct, model, cpu_encoding):
     """
     Predict energy consumption for a node using the LightGBM model.
@@ -265,6 +272,9 @@ def predict_energy_consumption(node_info, load_pct, model, cpu_encoding):
     """
     if model is None:
         return 0.0
+    
+    if load_pct == 0.0:
+        return 0.0  # No load means no energy consumption
     
     # Get encoded CPU model value
     cpu_model = node_info["cpu_model"].replace('-', ' ')
@@ -282,7 +292,7 @@ def predict_energy_consumption(node_info, load_pct, model, cpu_encoding):
     print(f"Predicting energy consumption for node {node_info['name']} with features: {features[0]}")
     try:
         prediction = model.predict(features)[0]
-        return max(0.0, prediction)  # Ensure non-negative energy consumption
+        return max(0.0, prediction) + get_network_cost(node_info)  # Ensure non-negative energy consumption
     except Exception as e:
         print(f"Error predicting energy consumption: {e}")
         return 0.0

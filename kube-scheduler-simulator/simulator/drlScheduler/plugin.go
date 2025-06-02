@@ -24,7 +24,7 @@ import (
 
 const (
 	drlScorerPluginName = "DRL"
-	pythonServerURL     = "http://localhost:5001/recommend_node" // UPDATED Endpoint name
+	pythonServerURL     = "http://172.17.0.1:8080/predict" // UPDATED Endpoint name
 )
 
 // DRLScorerPlugin uses a DRL model to select a node.

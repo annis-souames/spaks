@@ -28,8 +28,8 @@ func loadModel() (*leaves.Ensemble, error) {
 func calculateNetworkCost(nodeName string) float64 {
 	// Check if the node name conatisn the word "cloud"
 	if strings.Contains(strings.ToLower(nodeName), "cloud") {
-		// Generate an energy between 60 to 100
-		return float64(rand.IntN(100-60) + 60) // Cloud nodes have a higher cost
+		// Generate an energy between 500 to 1200
+		return float64(rand.IntN(1200-500) + 500) // Cloud nodes have a significantly higher cost for network usage
 	} else {
 		// Generate an energy between 20 to 50
 		return float64(rand.IntN(50-20) + 20) // Edge nodes have a lower cost
