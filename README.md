@@ -3,8 +3,6 @@
 
 **SPAKS** (Smart Power-Aware Kubernetes Scheduler) is a research project that introduces a novel scheduling technique for Kubernetes to optimize energy consumption across the cluster. This is achieved by leveraging a Deep Reinforcement Learning (DRL) model to make intelligent scheduling decisions that reduce energy consumption across the k8s cluster. The environment is simulated using [kube-scheduler-simulator](https://github.com/kubernetes-sigs/kube-scheduler-simulator) for scheduler behavior  and [Kwok](https://kwok.sigs.k8s.io/) for simulating several nodes and pods efficiently.
 
-This project is developed by Mohamed Annis Souames as part of a submitted research paper in collaboration with Dr. Satish Kumar, Pr. Ah Lian Kor, Dr. Thalita Vergilio and Dr. Nawar Jawad from Leeds Beckett University (Leeds, UK).
-
 ## Goal
 
 The primary goal of SPAKS is to reduce the overall energy footprint of a Kubernetes cluster without compromising performance. It employs a deep reinforcement learning model to achieve such reduction.
